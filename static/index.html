@@ -212,8 +212,8 @@
                             </div>
                             <div class="col-md-2">
                                 <div class="form-group">
-                                    <label id="threadsLabel">线程数 (0=自动)</label>
-                                    <input type="number" class="form-control" id="threads" value="0" min="0">
+                                    <label id="threadsLabel" title="单个视频转码任务占用的 CPU 核心数，与并行任务数无关">单任务线程数 (0=自动)</label>
+                                    <input type="number" class="form-control" id="threads" value="0" min="0" title="设置为 0 则由 FFmpeg 自动管理">
                                 </div>
                             </div>
                             <div class="col-md-2">
@@ -279,7 +279,18 @@
                 <div class="card card-warning card-outline">
                     <div class="card-header">
                         <h5 class="card-title m-0"><i class="fas fa-tasks mr-1"></i> 任务列表</h5>
-                        <div class="card-tools">
+                        <div class="card-tools d-flex align-items-center">
+                            <div class="input-group input-group-sm mr-2" style="width: 150px;">
+                                <div class="input-group-prepend">
+                                    <span class="input-group-text">并发数</span>
+                                </div>
+                                <select class="form-control" id="concurrencySelect" onchange="updateConcurrency()">
+                                    <option value="1">1</option>
+                                    <option value="2">2</option>
+                                    <option value="4">4</option>
+                                    <option value="8">8</option>
+                                </select>
+                            </div>
                             <button type="button" class="btn btn-tool" onclick="loadJobs()">
                                 <i class="fas fa-sync-alt"></i> 刷新
                             </button>
@@ -337,6 +348,7 @@
         bsCustomFileInput.init();
         loadJobs();
         checkHardware();
+        loadConcurrency();
         // Auto refresh every 5 seconds
         setInterval(loadJobs, 5000);
         
@@ -390,6 +402,30 @@
             
         } catch (e) {
             console.error("Failed to check hardware info:", e);
+        }
+    }
+
+    async function loadConcurrency() {
+        try {
+            const res = await fetch('/settings/concurrency');
+            const data = await res.json();
+            $('#concurrencySelect').val(data.max_concurrent_jobs);
+        } catch (e) {
+            console.error("Failed to load concurrency settings:", e);
+        }
+    }
+
+    async function updateConcurrency() {
+        const count = $('#concurrencySelect').val();
+        const formData = new FormData();
+        formData.append("count", count);
+        
+        try {
+            await fetch('/settings/concurrency', { method: 'POST', body: formData });
+            // Optionally reload jobs to reflect immediate changes if any
+            loadJobs();
+        } catch (e) {
+            alert("设置并发数失败: " + e.message);
         }
     }
 

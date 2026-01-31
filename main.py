@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -59,6 +60,36 @@ class JobStatus(BaseModel):
 
 JOBS: Dict[str, JobStatus] = {}
 JOB_PROCESSES: Dict[str, subprocess.Popen] = {}
+
+# 并发控制
+MAX_CONCURRENT_JOBS = int(os.environ.get("MAX_CONCURRENT_JOBS", 2))
+# 使用足够大的线程池来容纳可能的并发任务，实际调度由逻辑控制
+executor = ThreadPoolExecutor(max_workers=20)
+
+def try_start_jobs():
+    """尝试启动更多任务，直到达到最大并发数"""
+    running_count = sum(1 for j in JOBS.values() if j.status == "running")
+    available_slots = MAX_CONCURRENT_JOBS - running_count
+    
+    if available_slots > 0:
+        # 查找所有 pending 的任务，按创建时间排序
+        pending_jobs = sorted(
+            [j for j in JOBS.values() if j.status == "pending"], 
+            key=lambda x: x.created_at
+        )
+        
+        # 启动任务
+        for job in pending_jobs[:available_slots]:
+            job.status = "running"
+            executor.submit(run_transcode_job_wrapper, job.id)
+
+def run_transcode_job_wrapper(job_id: str):
+    """包装转码任务，确保完成后触发调度"""
+    try:
+        run_transcode_job(job_id)
+    finally:
+        # 任务结束（无论成功失败），尝试启动新任务
+        try_start_jobs()
 
 class TranscodeParams(BaseModel):
     vcodec: Optional[str] = "libx264"
@@ -382,6 +413,20 @@ def get_hardware_info():
             
     return info
 
+@app.get("/settings/concurrency")
+def get_concurrency():
+    return {"max_concurrent_jobs": MAX_CONCURRENT_JOBS}
+
+@app.post("/settings/concurrency")
+def set_concurrency(count: int = Form(...)):
+    global MAX_CONCURRENT_JOBS
+    if count < 1:
+        raise HTTPException(status_code=400, detail="并发数必须大于 0")
+    MAX_CONCURRENT_JOBS = count
+    # 立即尝试启动更多任务
+    try_start_jobs()
+    return {"max_concurrent_jobs": MAX_CONCURRENT_JOBS}
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     ext = Path(file.filename).suffix.lower()
@@ -448,15 +493,19 @@ def create_transcode_job(req: TranscodeRequest, background_tasks: BackgroundTask
             inputs=[inp], # 只有这一个文件
             outputs=single_output,
             params=req.params.model_dump(),
-            status="running",
+            status="pending", # 初始状态改为 pending
             input_size=input_size,
             duration=duration,
             progress=0.0
         )
         
         JOBS[job_id] = job
-        background_tasks.add_task(run_transcode_job, job_id)
+        # background_tasks.add_task(run_transcode_job, job_id)
+        # executor.submit(run_transcode_job, job_id)
         created_jobs.append(job_id)
+    
+    # 尝试启动任务
+    try_start_jobs()
     
     # 返回第一个 job_id 兼容旧前端，或者可以返回列表（前端需要适配）
     # 为了兼容现有前端（只接收一个 job_id），我们返回最后一个创建的 ID，

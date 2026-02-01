@@ -3,20 +3,26 @@ import uuid
 import shutil
 import subprocess
 import re
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Depends, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 
 # 配置路径
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
+DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
+CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", BASE_DIR / "config"))
 INPUT_DIR = DATA_DIR / "input"
 OUTPUT_DIR = DATA_DIR / "output"
 STATIC_DIR = BASE_DIR / "static"
@@ -26,6 +32,8 @@ PREVIEW_DIR = STATIC_DIR / "previews"
 ALLOWED_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".mpeg", ".mpg", ".flv", ".ts", ".m4v"}
 
 # 确保目录存在
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 INPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
@@ -80,6 +88,9 @@ def try_start_jobs():
         
         # 启动任务
         for job in pending_jobs[:available_slots]:
+            # 双重检查：防止在列出任务后任务被取消
+            if job.status != "pending":
+                continue
             job.status = "running"
             executor.submit(run_transcode_job_wrapper, job.id)
 
@@ -109,6 +120,92 @@ class TranscodeRequest(BaseModel):
     inputs: List[str]
     params: TranscodeParams
     output_dir: Optional[str] = None
+
+# --- Auth Configuration ---
+SECRET_KEY = os.environ.get("SECRET_KEY", "ffmpeg-web-ui-secret-key-change-this")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+USERS_FILE = CONFIG_DIR / "users.json"
+
+class User(BaseModel):
+    username: str
+    disabled: Optional[bool] = None
+
+class UserInDB(User):
+    hashed_password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class PasswordChange(BaseModel):
+    old_password: str
+    new_password: str
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def load_users():
+    if not USERS_FILE.exists():
+        return {}
+    try:
+        with open(USERS_FILE, "r") as f:
+            content = f.read()
+            if not content.strip():
+                return {}
+            return json.loads(content)
+    except:
+        return {}
+
+def save_users(users_db):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users_db, f, indent=2)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    users_db = load_users()
+    user_data = users_db.get(username)
+    if user_data is None:
+        raise credentials_exception
+    user = UserInDB(**user_data)
+    if user.disabled:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return user
+
+# --- End Auth Configuration ---
 
 def get_video_duration(input_path: Path) -> float:
     """使用 ffprobe 获取视频时长(秒)"""
@@ -350,19 +447,100 @@ def run_transcode_job(job_id: str):
             job.status = "failed"
             job.error = str(e)
 
-# API 接口
+# --- Auth Endpoints ---
+
+@app.post("/token", response_model=Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    users_db = load_users()
+    user_data = users_db.get(form_data.username)
+    if not user_data or not verify_password(form_data.password, user_data["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    user = UserInDB(**user_data)
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/auth/setup-required")
+def is_setup_required():
+    users = load_users()
+    return {"setup_required": len(users) == 0}
+
+@app.post("/auth/setup")
+def setup_first_user(new_user: CreateUserRequest):
+    users_db = load_users()
+    if len(users_db) > 0:
+        raise HTTPException(status_code=403, detail="Setup already completed")
+        
+    users_db[new_user.username] = {
+        "username": new_user.username,
+        "hashed_password": get_password_hash(new_user.password),
+        "disabled": False
+    }
+    save_users(users_db)
+    
+    # Auto login
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": new_user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/users/me", response_model=User)
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+@app.post("/users/password")
+async def change_password(
+    password_data: PasswordChange, 
+    current_user: User = Depends(get_current_user)
+):
+    users_db = load_users()
+    if not verify_password(password_data.old_password, users_db[current_user.username]["hashed_password"]):
+        raise HTTPException(status_code=400, detail="Old password incorrect")
+    
+    users_db[current_user.username]["hashed_password"] = get_password_hash(password_data.new_password)
+    save_users(users_db)
+    return {"message": "Password updated successfully"}
+
+@app.post("/users")
+async def create_new_user(
+    new_user: CreateUserRequest,
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.username != "admin":
+        raise HTTPException(status_code=403, detail="Only admin can create users")
+        
+    users_db = load_users()
+    if new_user.username in users_db:
+        raise HTTPException(status_code=400, detail="Username already registered")
+        
+    users_db[new_user.username] = {
+        "username": new_user.username,
+        "hashed_password": get_password_hash(new_user.password),
+        "disabled": False
+    }
+    save_users(users_db)
+    return {"username": new_user.username}
+
+# --- API Interfaces ---
 
 @app.get("/")
 def read_root():
     return FileResponse(STATIC_DIR / "index.html")
 
 @app.get("/jobs")
-def get_jobs():
+def get_jobs(current_user: User = Depends(get_current_user)):
     # 按时间倒序返回
     return list(reversed(list(JOBS.values())))
 
 @app.get("/hardware-info")
-def get_hardware_info():
+def get_hardware_info(current_user: User = Depends(get_current_user)):
     """检测可用硬件加速"""
     info = {
         "cpu": True,
@@ -414,11 +592,11 @@ def get_hardware_info():
     return info
 
 @app.get("/settings/concurrency")
-def get_concurrency():
+def get_concurrency(current_user: User = Depends(get_current_user)):
     return {"max_concurrent_jobs": MAX_CONCURRENT_JOBS}
 
 @app.post("/settings/concurrency")
-def set_concurrency(count: int = Form(...)):
+def set_concurrency(count: int = Form(...), current_user: User = Depends(get_current_user)):
     global MAX_CONCURRENT_JOBS
     if count < 1:
         raise HTTPException(status_code=400, detail="并发数必须大于 0")
@@ -428,7 +606,7 @@ def set_concurrency(count: int = Form(...)):
     return {"max_concurrent_jobs": MAX_CONCURRENT_JOBS}
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise HTTPException(status_code=400, detail="不支持的文件类型")
@@ -440,7 +618,7 @@ async def upload_file(file: UploadFile = File(...)):
     return {"filename": file.filename, "path": str(file_path)}
 
 @app.post("/scan-directory")
-def scan_directory(path: str = Form(...)):
+def scan_directory(path: str = Form(...), current_user: User = Depends(get_current_user)):
     base_path = Path(path)
     if not base_path.exists():
         raise HTTPException(status_code=400, detail="路径不存在")
@@ -459,7 +637,7 @@ def scan_directory(path: str = Form(...)):
     return {"count": len(found_files), "files": found_files}
 
 @app.post("/transcode")
-def create_transcode_job(req: TranscodeRequest, background_tasks: BackgroundTasks):
+def create_transcode_job(req: TranscodeRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     # 验证输入
     if not req.inputs:
         raise HTTPException(status_code=400, detail="没有输入文件")
@@ -516,7 +694,7 @@ def create_transcode_job(req: TranscodeRequest, background_tasks: BackgroundTask
     return {"job_id": created_jobs[-1], "status": "running", "created_count": len(created_jobs)}
 
 @app.post("/jobs/{job_id}/cancel")
-def cancel_job(job_id: str):
+def cancel_job(job_id: str, current_user: User = Depends(get_current_user)):
     if job_id not in JOBS:
         raise HTTPException(status_code=404, detail="任务不存在")
     
@@ -539,7 +717,7 @@ def cancel_job(job_id: str):
     return {"status": "cancelled", "message": "任务已中止"}
 
 @app.post("/preview")
-def create_preview(req: TranscodeRequest):
+def create_preview(req: TranscodeRequest, current_user: User = Depends(get_current_user)):
     if not req.inputs:
         raise HTTPException(status_code=400, detail="没有输入文件")
         

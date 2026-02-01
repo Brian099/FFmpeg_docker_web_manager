@@ -14,6 +14,10 @@
   <style>
     .content-wrapper { background-color: #f4f6f9; }
     .card-primary.card-outline { border-top: 3px solid #007bff; }
+    /* Login Modal Full Screen Background */
+    #loginModal {
+        background-color: #343a40;
+    }
   </style>
 </head>
 <body class="hold-transition sidebar-mini layout-fixed layout-footer-fixed">
@@ -22,9 +26,48 @@
   <!-- Navbar -->
   <nav class="main-header navbar navbar-expand navbar-white navbar-light">
     <!-- Left navbar links -->
-    <ul class="navbar-nav">
+    <ul class="navbar-nav align-items-center">
       <li class="nav-item">
         <a class="nav-link" data-widget="pushmenu" href="#" role="button"><i class="fas fa-bars"></i></a>
+      </li>
+      <li class="nav-item d-none d-sm-inline-block ml-2">
+        <h4 class="m-0" id="topbar-title">新建任务</h4>
+      </li>
+      <li class="nav-item ml-4" id="topbar-controls" style="display: none;">
+        <div class="d-flex align-items-center">
+            <div class="input-group input-group-sm mr-2" style="width: 150px;">
+                <div class="input-group-prepend">
+                    <span class="input-group-text">并发数</span>
+                </div>
+                <select class="form-control" id="concurrencySelect" onchange="updateConcurrency()">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="4">4</option>
+                    <option value="8">8</option>
+                </select>
+            </div>
+            <button type="button" class="btn btn-tool" onclick="loadJobs()">
+                <i class="fas fa-sync-alt"></i> 刷新
+            </button>
+        </div>
+      </li>
+    </ul>
+
+    <!-- Right navbar links -->
+    <ul class="navbar-nav ml-auto">
+      <li class="nav-item dropdown">
+        <a class="nav-link" data-toggle="dropdown" href="#">
+          <i class="far fa-user"></i> <span id="currentUser">User</span>
+        </a>
+        <div class="dropdown-menu dropdown-menu-lg dropdown-menu-right">
+          <a href="#" class="dropdown-item" data-toggle="modal" data-target="#userModal">
+            <i class="fas fa-cog mr-2"></i> 账户管理
+          </a>
+          <div class="dropdown-divider"></div>
+          <a href="#" class="dropdown-item" onclick="logout()">
+            <i class="fas fa-sign-out-alt mr-2"></i> 退出登录
+          </a>
+        </div>
       </li>
     </ul>
   </nav>
@@ -63,20 +106,8 @@
 
   <!-- Content Wrapper. Contains page content -->
   <div class="content-wrapper">
-    <!-- Content Header (Page header) -->
-    <div class="content-header">
-      <div class="container-fluid">
-        <div class="row mb-2">
-          <div class="col-sm-6">
-            <h1 class="m-0" id="page-title">新建任务</h1>
-          </div>
-        </div>
-      </div>
-    </div>
-    <!-- /.content-header -->
-
     <!-- Main content -->
-    <div class="content">
+    <div class="content pt-3">
       <div class="container-fluid">
         
         <div class="row" id="section-create">
@@ -168,11 +199,14 @@
                             </div>
                             <div class="col-md-2">
                                 <div class="form-group">
-                                    <label>画面处理</label>
-                                    <div class="custom-control custom-checkbox mt-2">
-                                        <input type="checkbox" class="custom-control-input" id="deinterlace">
-                                        <label class="custom-control-label" for="deinterlace" title="解决视频画面出现横向拉丝条纹的问题">反交错 (去横纹)</label>
-                                    </div>
+                                    <label>硬件加速 (GPU)</label>
+                                    <select class="form-control" id="hw_accel">
+                                        <option value="cpu" selected>禁用 (CPU软解)</option>
+                                        <option value="cuda">NVIDIA (CUDA 自动)</option>
+                                        <option value="cuda:0">NVIDIA (GPU 0)</option>
+                                        <option value="qsv">Intel 核显 (QSV)</option>
+                                        <option value="vaapi">AMD 核显 (VAAPI)</option>
+                                    </select>
                                 </div>
                             </div>
                         </div>
@@ -216,16 +250,13 @@
                                     <input type="number" class="form-control" id="threads" value="0" min="0" title="设置为 0 则由 FFmpeg 自动管理">
                                 </div>
                             </div>
-                            <div class="col-md-2">
+                            <div class="col-md-3">
                                 <div class="form-group">
-                                    <label>硬件加速 (GPU)</label>
-                                    <select class="form-control" id="hw_accel">
-                                        <option value="cpu" selected>禁用 (CPU软解)</option>
-                                        <option value="cuda">NVIDIA (CUDA 自动)</option>
-                                        <option value="cuda:0">NVIDIA (GPU 0)</option>
-                                        <option value="qsv">Intel 核显 (QSV)</option>
-                                        <option value="vaapi">AMD 核显 (VAAPI)</option>
-                                    </select>
+                                    <label>画面处理</label>
+                                    <div class="custom-control custom-checkbox mt-2">
+                                        <input type="checkbox" class="custom-control-input" id="deinterlace">
+                                        <label class="custom-control-label" for="deinterlace" title="解决视频画面出现横向拉丝条纹的问题">反交错 (去横纹，源视频较老时建议勾选此项)</label>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -277,25 +308,6 @@
             <!-- 3. Job Monitor -->
             <div class="col-lg-12">
                 <div class="card card-warning card-outline">
-                    <div class="card-header">
-                        <h5 class="card-title m-0"><i class="fas fa-tasks mr-1"></i> 任务列表</h5>
-                        <div class="card-tools d-flex align-items-center">
-                            <div class="input-group input-group-sm mr-2" style="width: 150px;">
-                                <div class="input-group-prepend">
-                                    <span class="input-group-text">并发数</span>
-                                </div>
-                                <select class="form-control" id="concurrencySelect" onchange="updateConcurrency()">
-                                    <option value="1">1</option>
-                                    <option value="2">2</option>
-                                    <option value="4">4</option>
-                                    <option value="8">8</option>
-                                </select>
-                            </div>
-                            <button type="button" class="btn btn-tool" onclick="loadJobs()">
-                                <i class="fas fa-sync-alt"></i> 刷新
-                            </button>
-                        </div>
-                    </div>
                     <div class="card-body table-responsive p-0">
                         <table class="table table-striped table-valign-middle" id="jobsTable">
                             <thead>
@@ -334,6 +346,89 @@
 </div>
 <!-- ./wrapper -->
 
+<!-- Login Modal -->
+<div class="modal fade" id="loginModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="loginTitle">登录</h5>
+            </div>
+            <div class="modal-body">
+                <form id="loginForm" onsubmit="handleAuth(event)">
+                    <div class="form-group">
+                        <label>用户名</label>
+                        <input type="text" class="form-control" id="username" required>
+                    </div>
+                    <div class="form-group">
+                        <label>密码</label>
+                        <input type="password" class="form-control" id="password" required>
+                    </div>
+                    <!-- Confirm Password field (hidden by default) -->
+                    <div class="form-group" id="confirmPasswordField" style="display:none;">
+                        <label>确认密码</label>
+                        <input type="password" class="form-control" id="confirmPassword">
+                    </div>
+                    <div class="text-danger mb-2" id="loginError"></div>
+                    <button type="submit" class="btn btn-primary btn-block" id="loginBtn">登录</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- User Management Modal -->
+<div class="modal fade" id="userModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">账户管理</h5>
+                <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <ul class="nav nav-tabs" id="userTabs" role="tablist">
+                    <li class="nav-item">
+                        <a class="nav-link active" id="pwd-tab" data-toggle="tab" href="#pwd-content" role="tab">修改密码</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" id="newuser-tab" data-toggle="tab" href="#newuser-content" role="tab">创建用户</a>
+                    </li>
+                </ul>
+                <div class="tab-content mt-3">
+                    <!-- Change Password -->
+                    <div class="tab-pane fade show active" id="pwd-content" role="tabpanel">
+                        <form onsubmit="handleChangePassword(event)">
+                            <div class="form-group">
+                                <label>旧密码</label>
+                                <input type="password" class="form-control" id="oldPwd" required>
+                            </div>
+                            <div class="form-group">
+                                <label>新密码</label>
+                                <input type="password" class="form-control" id="newPwd" required>
+                            </div>
+                            <button type="submit" class="btn btn-warning">修改密码</button>
+                        </form>
+                    </div>
+                    <!-- Create User (Admin only) -->
+                    <div class="tab-pane fade" id="newuser-content" role="tabpanel">
+                        <form onsubmit="handleCreateUser(event)">
+                            <div class="form-group">
+                                <label>新用户名</label>
+                                <input type="text" class="form-control" id="newUsername" required>
+                            </div>
+                            <div class="form-group">
+                                <label>密码</label>
+                                <input type="password" class="form-control" id="newUserPwd" required>
+                            </div>
+                            <button type="submit" class="btn btn-success">创建用户</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
 <!-- jQuery -->
 <script src="/static/plugins/jquery/jquery.min.js"></script>
 <!-- Bootstrap 4 -->
@@ -344,7 +439,186 @@
 <script src="/static/plugins/bs-custom-file-input/bs-custom-file-input.min.js"></script>
 
 <script>
+    // Auth Logic
+    const originalFetch = window.fetch;
+    window.fetch = async function(url, options = {}) {
+        const token = localStorage.getItem('access_token');
+        if (token) {
+            options.headers = options.headers || {};
+            if (options.headers instanceof Headers) {
+                options.headers.append('Authorization', `Bearer ${token}`);
+            } else if (Array.isArray(options.headers)) {
+                options.headers.push(['Authorization', `Bearer ${token}`]);
+            } else {
+                options.headers['Authorization'] = `Bearer ${token}`;
+            }
+        }
+
+        try {
+            const response = await originalFetch(url, options);
+            if (response.status === 401) {
+                localStorage.removeItem('access_token');
+                $('#loginModal').modal('show');
+            }
+            return response;
+        } catch (e) {
+            throw e;
+        }
+    };
+
+    let isSetupMode = false;
+
+    async function handleAuth(event) {
+        event.preventDefault();
+        const username = $('#username').val();
+        const password = $('#password').val();
+        
+        if (isSetupMode) {
+            const confirmPassword = $('#confirmPassword').val();
+            if (password !== confirmPassword) {
+                $('#loginError').text('两次输入的密码不一致');
+                return;
+            }
+            
+            try {
+                const res = await fetch('/auth/setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    localStorage.setItem('access_token', data.access_token);
+                    $('#loginModal').modal('hide');
+                    $('#currentUser').text(username);
+                    $('#loginError').text('');
+                    // Refresh data
+                    loadJobs();
+                    checkHardware();
+                    loadConcurrency();
+                } else {
+                    const data = await res.json();
+                    $('#loginError').text('Setup failed: ' + data.detail);
+                }
+            } catch (e) {
+                $('#loginError').text('Setup error: ' + e.message);
+            }
+        } else {
+            // Normal Login
+            const formData = new FormData();
+            formData.append('username', username);
+            formData.append('password', password);
+            
+            try {
+                const res = await originalFetch('/token', { method: 'POST', body: formData });
+                if (res.ok) {
+                    const data = await res.json();
+                    localStorage.setItem('access_token', data.access_token);
+                    $('#loginModal').modal('hide');
+                    $('#currentUser').text(username);
+                    $('#loginError').text('');
+                    // Refresh data
+                    loadJobs();
+                    checkHardware();
+                    loadConcurrency();
+                } else {
+                    $('#loginError').text('用户名或密码错误');
+                }
+            } catch (e) {
+                $('#loginError').text('登录请求失败: ' + e.message);
+            }
+        }
+    }
+
+    // Removed handleLogin as it's merged into handleAuth
+    
+    function logout() {
+        localStorage.removeItem('access_token');
+        location.reload();
+    }
+    
+    async function handleChangePassword(event) {
+        event.preventDefault();
+        const oldPwd = $('#oldPwd').val();
+        const newPwd = $('#newPwd').val();
+        
+        try {
+            const res = await fetch('/users/password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+            });
+            if (res.ok) {
+                alert('密码修改成功');
+                $('#userModal').modal('hide');
+                event.target.reset();
+            } else {
+                const data = await res.json();
+                alert('修改失败: ' + data.detail);
+            }
+        } catch (e) {
+            alert('错误: ' + e.message);
+        }
+    }
+    
+    async function handleCreateUser(event) {
+        event.preventDefault();
+        const username = $('#newUsername').val();
+        const password = $('#newUserPwd').val();
+        
+        try {
+            const res = await fetch('/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username, password: password })
+            });
+            if (res.ok) {
+                alert('用户创建成功');
+                $('#userModal').modal('hide');
+                event.target.reset();
+            } else {
+                const data = await res.json();
+                alert('创建失败: ' + data.detail);
+            }
+        } catch (e) {
+            alert('错误: ' + e.message);
+        }
+    }
+
+    // Check auth on load
+    async function checkAuth() {
+        // First check if setup is required
+        try {
+            const res = await fetch('/auth/setup-required');
+            const data = await res.json();
+            if (data.setup_required) {
+                isSetupMode = true;
+                $('#loginTitle').text('系统初始化 - 设置管理员');
+                $('#loginBtn').text('创建账户');
+                $('#confirmPasswordField').show();
+                $('#confirmPassword').prop('required', true);
+                $('#loginModal').modal('show');
+                return;
+            }
+        } catch(e) {
+            console.error("Check setup status failed", e);
+        }
+
+        const token = localStorage.getItem('access_token');
+        if (!token) {
+            $('#loginModal').modal('show');
+        } else {
+            // Optional: Decode token to get username
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                $('#currentUser').text(payload.sub);
+            } catch(e) {}
+        }
+    }
+
     $(document).ready(function () {
+        checkAuth();
         bsCustomFileInput.init();
         loadJobs();
         checkHardware();
@@ -356,6 +630,33 @@
         $('#crf, #preset').on('change', function() {
             $('#qualityPreset').val('custom');
         });
+
+        // Auto logout logic (30 minutes inactivity)
+        let lastActivity = Date.now();
+        const TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+        let activityThrottler = false;
+
+        function updateActivity() {
+            if (!activityThrottler) {
+                activityThrottler = true;
+                setTimeout(() => {
+                    lastActivity = Date.now();
+                    activityThrottler = false;
+                }, 1000); // Update at most once per second
+            }
+        }
+
+        $(document).on('mousemove keypress click scroll touchstart', updateActivity);
+
+        setInterval(function() {
+            // Only check if logged in
+            if (localStorage.getItem('access_token')) {
+                if (Date.now() - lastActivity > TIMEOUT_MS) {
+                    console.log("Auto logging out due to inactivity");
+                    logout();
+                }
+            }
+        }, 60000); // Check every minute
     });
 
     function applyQualityPreset() {
@@ -435,13 +736,15 @@
             $('#section-jobs').hide();
             $('#nav-create').addClass('active');
             $('#nav-jobs').removeClass('active');
-            $('#page-title').text('新建任务');
+            $('#topbar-title').text('新建任务');
+            $('#topbar-controls').hide();
         } else if (view === 'jobs') {
             $('#section-create').hide();
             $('#section-jobs').show();
             $('#nav-create').removeClass('active');
             $('#nav-jobs').addClass('active');
-            $('#page-title').text('任务列表');
+            $('#topbar-title').text('任务列表');
+            $('#topbar-controls').show();
             loadJobs(); // Refresh immediately when switching
         }
     }
@@ -453,6 +756,7 @@
             case 'running': return '<span class="badge badge-primary">进行中</span>';
             case 'completed': return '<span class="badge badge-success">已完成</span>';
             case 'failed': return '<span class="badge badge-danger">失败</span>';
+            case 'cancelled': return '<span class="badge badge-warning">已取消</span>';
             default: return `<span class="badge badge-light">${status}</span>`;
         }
     }
@@ -651,6 +955,10 @@
                         <span class="mr-2 small text-muted">${pct}%</span>
                         <i class="fas fa-stop-circle text-danger mr-2" style="cursor: pointer; font-size: 1.2rem;" onclick="cancelJob('${job.id}')" title="中止任务"></i>
                      `;
+                } else if (job.status === 'pending') {
+                    actionHtml = `
+                        <i class="fas fa-times-circle text-danger mr-2" style="cursor: pointer; font-size: 1.2rem;" onclick="cancelJob('${job.id}')" title="取消任务"></i>
+                    `;
                 } else if (job.status === 'completed') {
                     let timeStr = '';
                     if (job.completed_at) {
@@ -667,7 +975,7 @@
                 } else if (job.status === 'failed') {
                     actionHtml = '<span class="text-danger mr-2"><i class="fas fa-times"></i> 失败</span>';
                 } else if (job.status === 'cancelled') {
-                    actionHtml = '<span class="text-warning mr-2"><i class="fas fa-ban"></i> 已中止</span>';
+                    actionHtml = '<span class="text-warning mr-2"><i class="fas fa-ban"></i> 已取消</span>';
                 } else {
                     actionHtml = `<span class="text-muted mr-2">${job.status}</span>`;
                 }

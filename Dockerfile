@@ -17,9 +17,10 @@ RUN pip3 install --no-cache-dir -r /app/requirements.txt
 # 复制应用代码
 COPY . /app
 
-# 创建数据目录
+# 创建数据目录和配置目录
 ENV DATA_DIR=/data
-RUN mkdir -p /data/input /data/output /data/todo
+ENV CONFIG_DIR=/config
+RUN mkdir -p /data/input /data/output /data/todo /config
 
 EXPOSE 8000
 

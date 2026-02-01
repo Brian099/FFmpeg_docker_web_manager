@@ -39,6 +39,29 @@ sed -i "s|./media:/data|$USER_MEDIA_DIR:/data|g" "$OUTPUT_FILE"
 
 echo "已配置媒体目录: $USER_MEDIA_DIR -> /data"
 
+# ---------------------------------------------------------
+# 0.5. 配置配置目录
+# ---------------------------------------------------------
+read -p "请输入配置文件目录 (默认为当前目录下的 ./config): " USER_CONFIG_DIR
+
+# 如果为空，则使用默认值
+if [ -z "$USER_CONFIG_DIR" ]; then
+    USER_CONFIG_DIR="./config"
+fi
+
+# 创建目录
+if [ ! -d "$USER_CONFIG_DIR" ]; then
+    echo "目录 $USER_CONFIG_DIR 不存在，正在创建..."
+    mkdir -p "$USER_CONFIG_DIR"
+else
+    echo "使用已存在的目录: $USER_CONFIG_DIR"
+fi
+
+# 替换 docker-compose.yml 中的路径
+sed -i "s|./config:/config|$USER_CONFIG_DIR:/config|g" "$OUTPUT_FILE"
+
+echo "已配置配置目录: $USER_CONFIG_DIR -> /config"
+
 echo "正在检查硬件环境..."
 
 # ---------------------------------------------------------

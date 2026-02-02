@@ -1,5 +1,6 @@
 import os
 import uuid
+import hashlib
 import shutil
 import subprocess
 import re
@@ -26,7 +27,7 @@ CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", BASE_DIR / "config"))
 INPUT_DIR = DATA_DIR / "input"
 OUTPUT_DIR = DATA_DIR / "output"
 STATIC_DIR = BASE_DIR / "static"
-PREVIEW_DIR = STATIC_DIR / "previews"
+PREVIEW_DIR = DATA_DIR / "previews"
 
 # 允许的视频扩展名
 ALLOWED_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".mpeg", ".mpg", ".flv", ".ts", ".m4v"}
@@ -653,6 +654,17 @@ def create_transcode_job(req: TranscodeRequest, background_tasks: BackgroundTask
         job_id = uuid.uuid4().hex
         p = Path(inp)
         
+        # 清理该文件的旧预览
+        try:
+            path_hash = get_path_hash(p)
+            for preview_file in PREVIEW_DIR.glob(f"preview_{path_hash}_*.mp4"):
+                try:
+                    preview_file.unlink()
+                except:
+                    pass
+        except:
+            pass
+        
         # 获取源文件大小
         input_size = 0
         duration = 0.0
@@ -751,6 +763,10 @@ def cancel_job(job_id: str, current_user: User = Depends(get_current_user)):
             
     return {"status": "cancelled", "message": "任务已中止"}
 
+def get_path_hash(path: Path) -> str:
+    """计算路径的哈希值，用于关联预览文件"""
+    return hashlib.md5(str(path).encode('utf-8')).hexdigest()
+
 @app.post("/preview")
 def create_preview(req: TranscodeRequest, current_user: User = Depends(get_current_user)):
     if not req.inputs:
@@ -765,7 +781,7 @@ def create_preview(req: TranscodeRequest, current_user: User = Depends(get_curre
     start_time = max(0, duration / 2 - 5) # 从中间开始，或者至少0
     
     # 生成预览文件名
-    preview_filename = f"preview_{uuid.uuid4().hex}.mp4"
+    preview_filename = f"preview_{get_path_hash(input_path)}_{uuid.uuid4().hex}.mp4"
     preview_path = PREVIEW_DIR / preview_filename
     
     # 强制 mp4 格式用于 Web 预览
@@ -815,7 +831,7 @@ def create_preview(req: TranscodeRequest, current_user: User = Depends(get_curre
                 estimate_info["compression_ratio"] = (source_size - estimated_full_size) / source_size
 
         # 返回预览 URL 和 统计信息
-        preview_url = f"/static/previews/{preview_filename}"
+        preview_url = f"/previews/{preview_filename}"
         return {
             "preview_url": preview_url,
             "stats": estimate_info
@@ -828,3 +844,7 @@ def create_preview(req: TranscodeRequest, current_user: User = Depends(get_curre
 # 注意：我们需要先创建 static 目录
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# 挂载预览文件目录
+PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/previews", StaticFiles(directory=str(PREVIEW_DIR)), name="previews")

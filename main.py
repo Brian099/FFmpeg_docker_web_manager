@@ -689,9 +689,44 @@ def create_transcode_job(req: TranscodeRequest, background_tasks: BackgroundTask
     # 为了兼容现有前端（只接收一个 job_id），我们返回最后一个创建的 ID，
     # 但前端最好能刷新整个列表。
     # 实际上，现在的返回值前端并没有特别依赖 job_id 做跳转，而是刷新列表。
-    # 我们返回 "created_count" 让前端知道创建了多少个。
+    # 返回 "created_count" 让前端知道创建了多少个。
     
     return {"job_id": created_jobs[-1], "status": "running", "created_count": len(created_jobs)}
+
+@app.post("/jobs/cancel-all")
+def cancel_all_jobs(current_user: User = Depends(get_current_user)):
+    cancelled_count = 0
+    for job_id, job in JOBS.items():
+        if job.status in ["pending", "running"]:
+            # If running, terminate process
+            if job.status == "running" and job_id in JOB_PROCESSES:
+                try:
+                    JOB_PROCESSES[job_id].terminate()
+                except:
+                    pass
+            
+            job.status = "cancelled"
+            cancelled_count += 1
+            
+    return {"message": f"已取消 {cancelled_count} 个任务", "count": cancelled_count}
+
+@app.post("/jobs/retry-all")
+def retry_all_jobs(current_user: User = Depends(get_current_user)):
+    retried_count = 0
+    for job in JOBS.values():
+        if job.status in ["failed", "cancelled"]:
+            job.status = "pending"
+            job.progress = 0.0
+            job.error = None
+            job.completed_at = None
+            job.output_size = None
+            job.compression_ratio = None
+            retried_count += 1
+            
+    if retried_count > 0:
+        try_start_jobs()
+        
+    return {"message": f"已重置 {retried_count} 个任务", "count": retried_count}
 
 @app.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str, current_user: User = Depends(get_current_user)):

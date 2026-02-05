@@ -1,4 +1,4 @@
-# FFmpeg Web Transcoder
+# FFmpeg Transcoder Web manager
 
 一个基于 Web 的轻量级 FFmpeg 转码管理工具，专为简化视频转码任务而设计。它提供了一个直观的界面来配置转码参数、预览压缩效果，并利用硬件加速功能高效处理视频。
 

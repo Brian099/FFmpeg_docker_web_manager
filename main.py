@@ -913,6 +913,18 @@ def retry_all_jobs(current_user: User = Depends(get_current_user)):
         
     return {"message": f"已重置 {retried_count} 个任务", "count": retried_count}
 
+@app.post("/jobs/clear-failed")
+def clear_failed_jobs(current_user: User = Depends(get_current_user)):
+    to_remove = []
+    for job_id, job in JOBS.items():
+        if job.status == "failed":
+            to_remove.append(job_id)
+    
+    for job_id in to_remove:
+        del JOBS[job_id]
+        
+    return {"message": f"已清除 {len(to_remove)} 个失败任务", "count": len(to_remove)}
+
 @app.post("/jobs/clear-completed")
 def clear_completed_jobs(current_user: User = Depends(get_current_user)):
     """清除所有已完成的任务"""

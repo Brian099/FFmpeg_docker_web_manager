@@ -6,7 +6,6 @@ import subprocess
 import re
 import json
 import threading
-import stat
 import time
 from datetime import datetime
 from pathlib import Path
@@ -34,31 +33,8 @@ PREVIEW_DIR = DATA_DIR / "previews"
 TODO_DIR = DATA_DIR / "todo"
 
 # 工具路径
-# 优先检查 ffmpeg_linux 目录 (用户自定义的 Linux 版本)
-LINUX_FFMPEG_DIR = BASE_DIR / "ffmpeg_linux"
-
 FFMPEG_BIN = "ffmpeg"
 FFPROBE_BIN = "ffprobe"
-
-if LINUX_FFMPEG_DIR.exists():
-    ffmpeg_path = LINUX_FFMPEG_DIR / "ffmpeg"
-    ffprobe_path = LINUX_FFMPEG_DIR / "ffprobe"
-    
-    if ffmpeg_path.exists():
-        try:
-            st = os.stat(ffmpeg_path)
-            os.chmod(ffmpeg_path, st.st_mode | stat.S_IEXEC)
-        except Exception:
-            pass
-        FFMPEG_BIN = str(ffmpeg_path)
-        
-    if ffprobe_path.exists():
-        try:
-            st = os.stat(ffprobe_path)
-            os.chmod(ffprobe_path, st.st_mode | stat.S_IEXEC)
-        except Exception:
-            pass
-        FFPROBE_BIN = str(ffprobe_path)
 
 # 允许的视频扩展名
 ALLOWED_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".mpeg", ".mpg", ".flv", ".ts", ".m4v"}

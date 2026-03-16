@@ -3,12 +3,30 @@ FROM python:3.12-slim
 # 设置工作目录
 WORKDIR /app
 
-# 安装 ffmpeg
-# python:3.12-slim 基于 Debian，可以直接使用 apt 安装 ffmpeg
+# 安装工具并在线下载 FFmpeg (多架构)
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
+    ca-certificates \
+    curl \
+    xz-utils \
     procps \
     && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) pkg="ffmpeg-master-latest-linux64-gpl.tar.xz" ;; \
+        arm64) pkg="ffmpeg-master-latest-linuxarm64-gpl.tar.xz" ;; \
+        *) echo "Unsupported arch: ${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    url="https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/${pkg}"; \
+    mkdir -p /opt/ffmpeg; \
+    curl -L --retry 3 -o /tmp/ffmpeg.tar.xz "${url}"; \
+    tar -xJf /tmp/ffmpeg.tar.xz -C /opt/ffmpeg --strip-components=1; \
+    rm -f /tmp/ffmpeg.tar.xz; \
+    ln -sf /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg; \
+    ln -sf /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe; \
+    ffmpeg -version; \
+    ffprobe -version
 
 # 复制依赖并安装
 COPY requirements.txt /app/requirements.txt
@@ -16,11 +34,6 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # 复制应用代码
 COPY . /app
-
-# 给予 ffmpeg 可执行权限 (如果存在)
-RUN if [ -d "/app/ffmpeg_linux" ]; then \
-    chmod +x /app/ffmpeg_linux/ffmpeg /app/ffmpeg_linux/ffprobe; \
-    fi
 
 # 创建数据目录和配置目录
 ENV DATA_DIR=/data

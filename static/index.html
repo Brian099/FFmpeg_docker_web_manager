@@ -374,6 +374,12 @@
                             <button type="button" class="btn btn-outline-danger btn-sm mr-1" onclick="clearFailedJobs()" title="清除所有失败的任务">
                                 <i class="fas fa-times-circle"></i> 清理失败任务
                             </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm mr-1" onclick="clearCancelledJobs()" title="清除所有已取消的任务">
+                                <i class="fas fa-trash"></i> 清理已取消
+                            </button>
+                            <button type="button" class="btn btn-outline-danger btn-sm mr-1" id="deleteSelectedJobsBtn" onclick="deleteSelectedJobs()" title="删除勾选的任务" disabled>
+                                <i class="fas fa-trash-alt"></i> 删除已选择
+                            </button>
                             <button type="button" class="btn btn-success btn-sm" onclick="clearCompletedJobs()" title="清除所有已完成的任务">
                                 <i class="fas fa-check"></i> 清除已完成
                             </button>
@@ -383,6 +389,9 @@
                         <table class="table table-striped table-valign-middle" id="jobsTable">
                             <thead>
                             <tr>
+                                <th style="width: 32px;">
+                                    <input type="checkbox" id="jobsSelectAll" onclick="toggleSelectAllJobs(this)">
+                                </th>
                                 <th>ID</th>
                                 <th>状态</th>
                                 <th>输入文件</th>
@@ -397,6 +406,23 @@
                                 <!-- Jobs here -->
                             </tbody>
                         </table>
+                    </div>
+                    <div class="card-footer d-flex align-items-center justify-content-between">
+                        <div class="d-flex align-items-center">
+                            <span class="text-muted mr-2">每页</span>
+                            <select class="form-control form-control-sm mr-3" id="jobsPageSizeSelect" style="width: 90px;" onchange="setJobsPageSize()">
+                                <option value="10">10</option>
+                                <option value="20">20</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                                <option value="200">200</option>
+                            </select>
+                            <span class="text-muted" id="jobsPageInfo">第 1 / 1 页，共 0 条</span>
+                        </div>
+                        <div class="btn-group">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="jobsPrevBtn" onclick="goJobsPrevPage()">上一页</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="jobsNextBtn" onclick="goJobsNextPage()">下一页</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -883,6 +909,19 @@
         }
     }
 
+    async function clearCancelledJobs() {
+        if (!confirm("确定要清除所有已取消的任务记录吗？")) return;
+        
+        try {
+            const res = await fetch('/jobs/clear-cancelled', { method: 'POST' });
+            const data = await res.json();
+            alert(data.message);
+            loadJobs();
+        } catch (e) {
+            alert("操作失败: " + e.message);
+        }
+    }
+
     function switchView(view) {
         if (view === 'create') {
             $('#section-create').show();
@@ -898,7 +937,12 @@
             $('#nav-jobs').addClass('active');
             $('#topbar-title').text('任务列表');
             $('#topbar-controls').show();
-            loadJobs(); // Refresh immediately when switching
+            jobsPage = 1;
+            const ps = parseInt($('#jobsPageSizeSelect').val(), 10);
+            if (Number.isFinite(ps) && ps > 0) {
+                jobsPageSize = ps;
+            }
+            loadJobs(1); // Refresh immediately when switching
         }
     }
 
@@ -1262,19 +1306,148 @@
         $('#fileManagerModal').modal('hide');
     }
 
-    async function loadJobs() {
+    let jobsPage = 1;
+    let jobsPageSize = 50;
+    let jobsTotal = 0;
+    const selectedJobIds = new Set();
+
+    function updateDeleteSelectedButton() {
+        $('#deleteSelectedJobsBtn').prop('disabled', selectedJobIds.size === 0);
+    }
+
+    function updateSelectAllCheckbox() {
+        const master = document.getElementById('jobsSelectAll');
+        if (!master) return;
+        const boxes = $('#jobsTable tbody input.job-select');
+        const total = boxes.length;
+        let checked = 0;
+        boxes.each(function() {
+            if (this.checked) checked += 1;
+        });
+        master.indeterminate = checked > 0 && checked < total;
+        master.checked = total > 0 && checked === total;
+    }
+
+    function toggleJobSelection(jobId, checkbox) {
+        if (checkbox.checked) {
+            selectedJobIds.add(jobId);
+        } else {
+            selectedJobIds.delete(jobId);
+        }
+        updateSelectAllCheckbox();
+        updateDeleteSelectedButton();
+    }
+
+    function toggleSelectAllJobs(master) {
+        const check = master.checked;
+        $('#jobsTable tbody input.job-select').each(function() {
+            const jobId = this.getAttribute('data-job-id');
+            this.checked = check;
+            if (check) {
+                selectedJobIds.add(jobId);
+            } else {
+                selectedJobIds.delete(jobId);
+            }
+        });
+        updateSelectAllCheckbox();
+        updateDeleteSelectedButton();
+    }
+
+    async function deleteSelectedJobs() {
+        const ids = Array.from(selectedJobIds);
+        if (ids.length === 0) {
+            alert("未选择任何任务");
+            return;
+        }
+        if (!confirm(`确定要删除已选择的 ${ids.length} 个任务吗？`)) return;
+
         try {
-            const res = await fetch('/jobs');
+            const res = await fetch('/jobs/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job_ids: ids })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                alert(data.detail || data.message || "删除失败");
+                return;
+            }
+            alert(data.message);
+            selectedJobIds.clear();
+            const master = document.getElementById('jobsSelectAll');
+            if (master) {
+                master.checked = false;
+                master.indeterminate = false;
+            }
+            updateDeleteSelectedButton();
+            loadJobs(jobsPage);
+        } catch (e) {
+            alert("操作失败: " + e.message);
+        }
+    }
+
+    function setJobsPageSize() {
+        const val = parseInt($('#jobsPageSizeSelect').val(), 10);
+        if (!Number.isFinite(val) || val < 1) return;
+        jobsPageSize = val;
+        jobsPage = 1;
+        loadJobs(1);
+    }
+
+    function updateJobsPaginationUI() {
+        const totalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageSize));
+        $('#jobsPageInfo').text(`第 ${jobsPage} / ${totalPages} 页，共 ${jobsTotal} 条`);
+        $('#jobsPrevBtn').prop('disabled', jobsPage <= 1);
+        $('#jobsNextBtn').prop('disabled', jobsPage >= totalPages);
+    }
+
+    function goJobsPrevPage() {
+        if (jobsPage <= 1) return;
+        loadJobs(jobsPage - 1);
+    }
+
+    function goJobsNextPage() {
+        const totalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageSize));
+        if (jobsPage >= totalPages) return;
+        loadJobs(jobsPage + 1);
+    }
+
+    async function loadJobs(page = null) {
+        try {
+            if (page !== null) {
+                jobsPage = page;
+            }
+
+            const res = await fetch(`/jobs?page=${encodeURIComponent(jobsPage)}&page_size=${encodeURIComponent(jobsPageSize)}`);
             if (!res.ok) {
                 // 如果未授权或其他错误，不继续处理
                 return;
             }
-            const jobs = await res.json();
-            
-            if (!Array.isArray(jobs)) {
+            const payload = await res.json();
+            let jobs = [];
+            if (Array.isArray(payload)) {
+                jobs = payload;
+                jobsTotal = payload.length;
+            } else if (payload && Array.isArray(payload.items)) {
+                jobs = payload.items;
+                jobsTotal = typeof payload.total === 'number' ? payload.total : jobs.length;
+                jobsPage = typeof payload.page === 'number' ? payload.page : jobsPage;
+                jobsPageSize = typeof payload.page_size === 'number' ? payload.page_size : jobsPageSize;
+                $('#jobsPageSizeSelect').val(String(jobsPageSize));
+            } else {
                 return;
             }
 
+            const totalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageSize));
+            if (jobsTotal > 0 && jobsPage > totalPages) {
+                jobsPage = totalPages;
+                updateJobsPaginationUI();
+                loadJobs(jobsPage);
+                return;
+            }
+
+            updateJobsPaginationUI();
+            
             const tbody = $('#jobsTable tbody');
             tbody.empty();
             
@@ -1371,8 +1544,12 @@
                     compressionInfo = `<span class="${color} font-weight-bold">${ratio}%</span>`;
                 }
 
+                const checkedAttr = selectedJobIds.has(job.id) ? 'checked' : '';
                 const tr = `
                     <tr>
+                        <td>
+                            <input type="checkbox" class="job-select" data-job-id="${job.id}" ${checkedAttr} onchange="toggleJobSelection('${job.id}', this)">
+                        </td>
                         <td>${job.id.substring(0, 8)}</td>
                         <td>${getStatusBadge(job.status)}</td>
                         <td title="${inputPath}" style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${inputPath}</td>
@@ -1385,6 +1562,8 @@
                 `;
                 tbody.append(tr);
             });
+            updateSelectAllCheckbox();
+            updateDeleteSelectedButton();
         } catch (e) {
             console.error("加载任务失败", e);
         }

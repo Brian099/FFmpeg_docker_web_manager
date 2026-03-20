@@ -75,6 +75,9 @@ class JobStatus(BaseModel):
     created_at: float = Field(default_factory=lambda: datetime.now().timestamp())
     completed_at: Optional[float] = None
 
+class DeleteJobsRequest(BaseModel):
+    job_ids: List[str]
+
 JOBS: Dict[str, JobStatus] = {}
 JOB_PROCESSES: Dict[str, subprocess.Popen] = {}
 JOBS_LOCK = threading.RLock()
@@ -747,9 +750,31 @@ def read_root():
     return FileResponse(STATIC_DIR / "index.html")
 
 @app.get("/jobs")
-def get_jobs(current_user: User = Depends(get_current_user)):
-    # 按时间倒序返回
-    return list(reversed(list(JOBS.values())))
+def get_jobs(
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+):
+    with JOBS_LOCK:
+        jobs_sorted = sorted(JOBS.values(), key=lambda j: j.created_at, reverse=True)
+        total = len(jobs_sorted)
+        
+        if page is None and page_size is None:
+            return jobs_sorted
+        
+        p = 1 if page is None else page
+        ps = 50 if page_size is None else page_size
+        if p < 1:
+            p = 1
+        if ps < 1:
+            ps = 1
+        if ps > 200:
+            ps = 200
+            
+        start = (p - 1) * ps
+        end = start + ps
+        items = jobs_sorted[start:end]
+        return {"items": items, "total": total, "page": p, "page_size": ps}
 
 @app.get("/hardware-info")
 def get_hardware_info(current_user: User = Depends(get_current_user)):
@@ -976,6 +1001,20 @@ def clear_failed_jobs(current_user: User = Depends(get_current_user)):
         
     return {"message": f"已清除 {len(to_remove)} 个失败任务", "count": len(to_remove)}
 
+@app.post("/jobs/clear-cancelled")
+def clear_cancelled_jobs(current_user: User = Depends(get_current_user)):
+    with JOBS_LOCK:
+        to_remove = []
+        for job_id, job in JOBS.items():
+            if job.status == "cancelled":
+                to_remove.append(job_id)
+        
+        for job_id in to_remove:
+            del JOBS[job_id]
+    persist_jobs(force=True)
+        
+    return {"message": f"已清除 {len(to_remove)} 个已取消任务", "count": len(to_remove)}
+
 @app.post("/jobs/clear-completed")
 def clear_completed_jobs(current_user: User = Depends(get_current_user)):
     """清除所有已完成的任务"""
@@ -990,6 +1029,29 @@ def clear_completed_jobs(current_user: User = Depends(get_current_user)):
         
     persist_jobs(force=True)
     return {"message": f"已清除 {len(to_remove)} 个已完成的任务", "count": len(to_remove)}
+
+@app.post("/jobs/delete")
+def delete_jobs(req: DeleteJobsRequest, current_user: User = Depends(get_current_user)):
+    removed = 0
+    not_found: List[str] = []
+    with JOBS_LOCK:
+        for job_id in req.job_ids:
+            if job_id not in JOBS:
+                not_found.append(job_id)
+                continue
+            if job_id in JOB_PROCESSES:
+                try:
+                    JOB_PROCESSES[job_id].terminate()
+                except Exception:
+                    pass
+                try:
+                    del JOB_PROCESSES[job_id]
+                except Exception:
+                    pass
+            del JOBS[job_id]
+            removed += 1
+    persist_jobs(force=True)
+    return {"message": f"已删除 {removed} 个任务", "count": removed, "not_found": not_found}
 
 @app.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: str, current_user: User = Depends(get_current_user)):
